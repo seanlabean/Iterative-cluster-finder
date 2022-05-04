@@ -15,5 +15,7 @@ By first identifying a sufficiently dense structure of stars (using observationa
 ### Software packages
 This routine requires:
 
-* an installation of the [Astrophysical Multipurpose Software Envoronment (AMUSE)](https://github.com/amusecode/amuse)
-* Python data analysis library [scikit-learn](https://scikit-learn.org/) which itself requires NumPy, SciPy, and matplotlib.
+* An installation of the [Astrophysical Multipurpose Software Envoronment (AMUSE)](https://github.com/amusecode/amuse).
+* Python astophysical package [yt-project](https://yt-project.org/).
+* Python data analysis package [scikit-learn](https://scikit-learn.org/).
+* Python libraries numpy, scipy, matplotlib.
