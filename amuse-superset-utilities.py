@@ -5,9 +5,26 @@ from amuse.lab import units as u
 from amuse.lab import Particles
 import amuse.lab
 
-def make_amuse_set_gas_and_stars(input_hdf5_plt,
-                                 input_hdf5_part,
-                                 calc_gas_ener=False):
+class star_prop_storage(object):
+
+    def __init__(self, superset,
+                 total_star_mass=None,
+                 total_bound_mass=None,
+                 total_star_energy=None,
+                 lagr=None):
+
+        # The actual stars in the clusters.
+        # Note the ones with index=-1 are not in a cluster.
+        self.superset      = superset
+        # These are all stellar cluster parameters.
+        self.TM = total_star_mass
+        self.TBM = total_bound_mass
+        self.TE = total_star_energy
+        self.lagr = lagr
+
+        return
+
+def make_amuse_set_gas_and_stars(ds, calc_gas_ener=False):
     """
     Creates an AMUSE particle set from a FLASH output 
     containing gas cells and star particles.
@@ -29,8 +46,7 @@ def make_amuse_set_gas_and_stars(input_hdf5_plt,
     gas   - gas particle set
     """
     # Load hdf5 files in yt so we can extract cell and particle information
-    ds = yt.load(input_hdf5_plt,
-                 particle_filename=input_hdf5_part)
+
     ad = ds.all_data()
     
     # Set gas cell properties as AMUSE particle data
@@ -70,9 +86,7 @@ def make_amuse_set_gas_and_stars(input_hdf5_plt,
 
     return stars, gas
 
-def setup_superset(input_hdf5_plt,
-                   input_hdf5_part,
-                   calc_gas_ener=False):
+def setup_superset(ds, calc_gas_ener=False):
     '''
     Generates an AMUSE superset of gas and star particles
     tags = [0] and [1] respectively.
@@ -97,9 +111,7 @@ def setup_superset(input_hdf5_plt,
     '''
     # First extract star and gas positions, velocities, and masses
     # from hdf5 output using yt.
-    stars, gas = make_amuse_set_gas_and_stars(input_hdf5_plt,
-                                              input_hdf5_part,
-                                              calc_gas_ener)
+    stars, gas = make_amuse_set_gas_and_stars(ds, calc_gas_ener)
     
     # Build superset.
     superset = Particles()
@@ -221,3 +233,141 @@ def iterate_remove_stars(superset, iterate_gas_ener=False, report_removal_stats=
         print("total mass rmvd: {:.2f} MSun".format(\
                     (superset.mass.sum()-supersetf.mass.sum()).value_in(u.MSun)))
     return supersetf
+
+def get_star_bound_frac(superset):
+    s_ind = np.where(superset.tag==1.)
+    bs_ind = np.where((superset.tag==1.) & (superset.totE.value_in(u.J)))
+    
+    total_star_mass = superset[s_ind].mass.value_in(u.MSun).sum()
+    total_bound_mass = superset[bs_ind].mass.value_in(u.MSun).sum()
+
+    total_star_energy = superset[s_ind].totE.value_in(u.J).sum()
+    return total_star_mass, total_bound_mass, total_star_energy
+
+def get_lagrangian_radii(superset, com=None, 
+                         frac_bins=[0.0, 0.25, 0.5, 0.75, 1.0],
+                         verbose=0, rank=''):
+    """
+    Lagrangian radii of all stars in
+    a mass bin from frac_bins[i]
+    to frac_bins[i+1], with the
+    bins filled going from the center
+    of mass outward in radius.
+
+
+    NOTE: This routine will change the
+    mass fraction for the last bin to
+    guarantee that at least TWO stars
+    are in the last bin, always.
+
+    Keyword arguments:
+    stars          -- AMUSE particle set.
+    com            -- Particle set center of mass
+                      in cm. If None, will be 
+                      calculated.
+    frac_bins      -- The fractional mass bins
+                      used to divide the stars.
+    verbose        -- Debugging verbosity.
+
+    Returns:
+    lag_r          -- Lagrangian radii.
+    """
+    if (rank != ""):
+        pre = "[lagrangian_radii]: Rank", rank
+    else:
+        pre = "[lagrangian_radii]:"
+
+    if (verbose==True): verbose = 3 # Just turn it all on if debug was passed.
+
+    stars = superset[np.where(superset.tag==1.)]
+    lag_r       = np.zeros(len(frac_bins)-1)
+    # Center of mass.
+    if (com is None): com = stars.center_of_mass()
+    # Relative positions
+    lr_rel_pos  = stars.position.value_in(u.cm) - com.value_in(u.cm)
+    # Sorted relative position indicies.
+    rel_radii   = np.sqrt(np.sum(lr_rel_pos**2.0, axis=1))
+    sort_ind    = np.argsort(rel_radii)
+    # Masses.
+    lr_mass     = stars.mass.value_in(u.g)
+    # Relative sorted cumulative masses.
+    rel_lr_mass = lr_mass[sort_ind].cumsum()/lr_mass.sum()
+    # Number of bins
+    num_bins    = len(frac_bins)-1
+
+    # Ensure that at least TWO stars are always in the first mass bin.
+    #if (rel_lr_mass[1] > frac_bins[1]):
+    #     frac_bins[1] = rel_lr_mass[1] + 0.01
+    
+    if (verbose > 1): print pre, "rel_lr_mass=", rel_lr_mass
+    if (verbose > 1): print pre, "len of rel_lr_mass", len(rel_lr_mass)
+
+    for j in range(num_bins):
+        # Lower and upper percentage bounds.
+        lower       = 0.0 # For Lagrangian radii, this is always cumulative and inclusive.
+        upper       = frac_bins[j+1]
+        if (verbose > 2): print pre, "lower=", lower
+        if (verbose > 2): print pre, "upper=", upper
+        
+        # If the first star in radius encountered
+        # is a higher fraction of the total stellar
+        # mass than the current bin right edge,
+        # skip this loop (i.e. leave this one zero).
+        if (rel_lr_mass[0] > upper): continue
+        
+        # Lower bound sorted index (inclusive and cumulative, so always 0).
+        lower_ind   = 0
+        # Upper bound sorted index (inclusive).
+        upper_ind   = np.where(rel_lr_mass <= upper)[0][-1]
+        if (verbose > 2): print pre, "lower_ind=", lower_ind
+        if (verbose > 2): print pre, "upper_ind=", upper_ind
+        # Now select a subset of the stars in this bin
+        if (lower_ind == upper_ind):
+            bin_stars = stars[sort_ind[lower_ind]]
+            if (verbose > 2): print pre, "Single star in bin of mass =", bin_stars.mass.value_in(u.MSun)
+        else:
+            bin_stars = stars[sort_ind[lower_ind:upper_ind]]
+            if (verbose > 2):
+                print pre, "bin_stars masses=", bin_stars.mass.value_in(u.MSun)
+                print pre, "len(bin_stars)=", len(bin_stars)
+        rel_pos   = (bin_stars.position - com).value_in(u.cm)
+        
+        if (lower_ind > upper_ind):
+            if (verbose > 2): print pre, "This bin must be empty, lower_ind > upper_ind!"
+            lag_r[j] = 0.0
+        elif (lower_ind == upper_ind):
+            rel_r     = np.sqrt((rel_pos**2.).sum())
+            lag_r[j] = rel_r
+        else:
+            rel_r     = np.sqrt((rel_pos**2.).sum(axis=1))
+            sort_m    = bin_stars.mass[np.argsort(rel_r)].value_in(u.g)
+            sort_r    = rel_r[np.argsort(rel_r)]
+            rel_m     = sort_m.cumsum()/(bin_stars.mass.sum().value_in(u.g))
+            if (verbose > 2): print pre, "rel_m=", rel_m
+            hm_ind    = np.where(rel_m>= 0.5)[0][0]
+            lag_r[j] = sort_r[hm_ind]
+    if (verbose > 2): print pre, "lag_r =", lag_r
+    if (verbose > 0): print pre, "stored particle Lagrangian radii."
+
+    return lag_r
+
+def track_stars_props(local_files, calc_gas_ener=False, out_dir='./', outfile='star_props'):
+
+    for f in local_files:
+        ds = yt.load(f)
+
+        superset = setup_superset(ds, calc_gas_ener=False)
+
+        superset = update_total_E(superset,calc_gas_ener=False)
+
+        total_star_mass, total_bound_mass, total_star_energy = get_star_bound_frac(superset)
+
+        lagr = get_lagrangian_radii(stars, com=None, 
+                                    frac_bins=[0.0, 0.25, 0.5, 0.75, 1.0],
+                                    verbose=0, rank='')
+
+        star_props = star_prop_storage(superset, total_star_mass, total_bound_mass, total_star_energy, lagr)
+
+        with open(out_dir+out_file+f[-4:]+'pickle', 'wb') as wf:
+            pickle.dump(star_props, wf)
+            wf.close()
