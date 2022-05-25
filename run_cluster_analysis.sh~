@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# use hop?
+use_hop=true
+num_procs=80
+
+ANA_DIR=~/analysis_routines/
+WORK_DIR=~/Runs/old_M3V02B_same_cloud_from_M3V02A/data/
+
+cd ${WORK_DIR}
+
+echo "I'm analyzing" ${WORK_DIR}
+
+if [ "$use_hop" = true ]; then
+    num_procs=$[$num_procs/2]
+    cf="hop"
+else
+    cf="dbscan"
+fi
+
+echo "num_procs=" ${num_procs}
+
+
+$MPIEXEC -np ${num_procs} --hostfile ~/small_hosts python2.7 ${ANA_DIR}energy_analysis2.py -w ${WORK_DIR}cluster_analysis_hop/ -c 1 -cf ${cf} -bbn -rsd > out_cluster.txt 2>&1 &
